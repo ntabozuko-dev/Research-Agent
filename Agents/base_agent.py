@@ -1,39 +1,16 @@
-import json
-import requests
+from llm import chat
+from tool_parsing import parse_tool_call
 
-OLLAMA_URL = 'http://localhost:11434/api/chat'
-MODEL = 'llama3'
 
 class BaseAgent:
     def __init__(self, name: str, system_prompt: str, tools: list[dict]):
         self.name = name
-        self.system_prompt = system_prompt
         self.tools = tools  # list of tool description dicts
+        self.system_prompt = system_prompt + self._build_tool_prompt()
 
-    def _chat(self, messages: list[dict]) -> str: 
-        payload = { 
-            'model': MODEL, 
-            'messages': messages, 
-            'stream': False, 
-        } 
-        try: 
-            response = requests.post(OLLAMA_URL, json=payload, timeout=60) 
-            response.raise_for_status()  # catches non-200 HTTP responses 
-            return response.json()['message']['content'] 
- 
-        except requests.exceptions.ConnectionError: 
-            return ( 
-                'I could not connect to Ollama. ' 
-                'Please make sure it is running with: ollama serve' 
-            ) 
-        except requests.exceptions.Timeout: 
-            return ( 
-                'The request to Ollama timed out. ' 
-                'The model may be too large for your machine — ' 
-                'try switching to a smaller model like phi3 in base_agent.py.' 
-            ) 
-        except requests.exceptions.RequestException as e: 
-            return f'An unexpected network error occurred: {e}'  
+    def _chat(self, messages: list[dict]) -> str:
+        """Return the model's reply text. Raises llm.OllamaError on failure."""
+        return chat(messages)
 
     def _build_tool_prompt(self) -> str:
         """Describe tools to the model in the system prompt."""
@@ -50,13 +27,4 @@ class BaseAgent:
 
     def _parse_tool_call(self, text: str) -> dict | None:
         """Try to parse the model response as a tool call JSON."""
-        try:
-            # Strip markdown code fences if present
-            clean = text.strip().strip('`').strip()
-            if clean.startswith('{'):
-                data = json.loads(clean)
-                if 'tool' in data and 'args' in data:
-                    return data
-        except json.JSONDecodeError:
-            pass
-        return None
+        return parse_tool_call(text)

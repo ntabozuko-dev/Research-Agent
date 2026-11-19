@@ -1,115 +1,88 @@
 # Research Agent
 
-A command-line research assistant that combines local LLM conversation with a small multi-agent research pipeline. The app chats normally, and when the user asks to research a topic it searches the web, summarizes findings, checks the summary, and formats citations into a report.
+[![tests](https://github.com/ntabozuko-dev/Research-Agent/actions/workflows/tests.yml/badge.svg)](https://github.com/ntabozuko-dev/Research-Agent/actions/workflows/tests.yml)
+
+A local-first, command-line research assistant. It chats normally through a local LLM (Ollama); when you ask it to research a topic, the LLM emits a **tool call** that hands the request to a small multi-agent pipeline which searches the web, summarises, fact-checks and cites, then returns a report.
 
 ## Features
 
-- Conversational CLI interface
-- Local LLM calls through Ollama
-- Research trigger routing via `ConversationManager`
-- DuckDuckGo web search helper
-- Summarization, fact-checking, and citation agents
-- Formatted research report output
+- Conversational CLI
+- LLM inference runs locally through [Ollama](https://ollama.com) (no cloud LLM API or key)
+- LLM-driven routing: the model decides when to call the `run_research` tool (JSON tool calls, tolerant of code-fenced output)
+- Four cooperating agents run by an orchestrator: search, summarise, fact-check, cite
+- Clear, actionable errors (Ollama not running, model not pulled, timeouts) instead of silent failures
+- Unit-tested, with CI on Linux (Python 3.10 and 3.12)
 
-## Project Structure
+## How it works
+
+```text
+You ──► ConversationManager ──► Ollama (llama3)
+              │  model replies {"tool": "run_research", "args": {"topic": "..."}}
+              ▼
+        ResearchOrchestrator
+          1. SearchAgent       LLM writes the query ► DuckDuckGo search
+          2. SummariserAgent   extractive tool + LLM rewrites as bullet points
+          3. FactCheckerAgent  LLM flags unsupported or doubtful statements
+          4. CitationAgent     APA-style references for each source
+              ▼
+        report ──► back through the model ──► reply to you
+```
+
+## Project structure
 
 ```text
 .
-├── main.py                     # CLI entry point
-├── conversation_manager.py     # Chat loop, tool-call parsing, research routing
-├── orchestrator.py             # Coordinates the research pipeline
-├── Agents/
-│   ├── base_agent.py           # Shared Ollama chat helper and tool-call parsing
-│   ├── search_agent.py         # Builds/searches research queries
-│   ├── summariser_agent.py     # Produces concise summaries
-│   ├── fact_checker_agent.py   # Reviews summaries for unsupported claims
-│   └── citation_agent.py       # Formats source citations
-└── Tools/
-    ├── web_search.py           # DuckDuckGo search helper
-    ├── summariser.py           # Lightweight extractive summarizer
-    └── citation.py             # Basic APA-style citation formatter
+├── main.py                  # CLI entry point
+├── conversation_manager.py  # Chat loop, tool-call routing, history
+├── orchestrator.py          # Runs the research pipeline, compiles the report
+├── llm.py                   # The only module that talks to Ollama (MODEL / URL live here)
+├── tool_parsing.py          # Parses JSON tool calls from model output
+├── agents/                  # BaseAgent + search, summariser, fact-checker, citation agents
+├── tools/                   # web_search, extractive summariser, citation formatter
+├── tests/                   # pytest suite (all network/LLM calls mocked)
+└── .github/workflows/       # CI
 ```
-
-## Requirements
-
-- Python 3.10+
-- Ollama installed and running locally
-- The `llama3` model pulled in Ollama
-- Python package:
-  - `requests`
 
 ## Setup
 
-Install Python dependencies:
+Requires Python 3.10+ and [Ollama](https://ollama.com).
 
 ```bash
-pip install requests
+pip install -r requirements.txt
+
+ollama serve            # in one terminal
+ollama pull llama3      # once
 ```
 
-Start Ollama:
-
-```bash
-ollama serve
-```
-
-Pull the default model if needed:
-
-```bash
-ollama pull llama3
-```
-
-The model name is configured in `conversation_manager.py` and `Agents/base_agent.py`:
-
-```python
-MODEL = 'llama3'
-```
-
-Change that value if you want to use a smaller or different local model.
+To use a smaller or different model, change `MODEL` in `llm.py`.
 
 ## Usage
-
-Run the assistant:
 
 ```bash
 python main.py
 ```
 
-You can chat normally:
-
 ```text
 You: hello
-```
-
-To trigger the research pipeline, ask for research explicitly:
-
-```text
 You: research renewable energy storage trends
+You: quit
 ```
 
-Exit with:
+## Tests
 
-```text
-quit
+```bash
+pip install -r requirements-dev.txt
+pytest
 ```
 
-## How It Works
+No Ollama or internet connection is needed: the LLM and search calls are mocked.
 
-1. `main.py` starts a terminal chat loop.
-2. `ConversationManager` sends user input to the local Ollama model.
-3. If the model returns a `run_research` tool call, the manager passes the topic to `ResearchOrchestrator`.
-4. `ResearchOrchestrator` runs:
-   - `SearchAgent`
-   - `SummariserAgent`
-   - `FactCheckerAgent`
-   - `CitationAgent`
-5. The compiled report is sent back through the conversation manager for a final assistant response.
+## Limitations
 
-## Known Issues
+This is a prototype, and its limits are worth knowing:
 
-- Some agent methods currently treat `_chat()` as if it returns a full Ollama response object, but `BaseAgent._chat()` returns only the message content string. Those methods may need to parse the returned string directly.
-- Package directories are named `Agents` and `Tools`, while imports use lowercase `agents` and `tools`. This may work on case-insensitive filesystems like Windows, but can fail on case-sensitive systems.
-- `Agents/_init_.py` and `Tools/_init_.py` are named with one underscore on each side. Python package initializers are normally named `__init__.py`.
-
-## Notes
-
-This is a local-first prototype. It depends on Ollama for LLM responses and DuckDuckGo's public instant-answer endpoint for search results, so research quality and coverage can vary by topic.
+- **Search coverage varies.** It uses DuckDuckGo's free Instant Answer API, which returns related topics and abstracts rather than full web results. Broad or niche queries can come back empty ("No results found").
+- **Summaries are built from search snippets**, not from the full text of the pages.
+- **Fact-checking is LLM self-review**, not verification against sources. Treat it as a sanity check.
+- **Citations are basic.** Search results carry no author or date, so references use "(n.d.)".
+- **Quality depends on the local model.** Smaller models follow the tool-call format less reliably.
